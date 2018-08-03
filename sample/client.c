@@ -35,8 +35,10 @@
 #include <signal.h>
 #include <event2/event.h>
 #include <netinet/tcp.h>
-
+#include <stdbool.h>
+#include <ctype.h>
 #define MAX_VALUE_SIZE 8192
+#define CONSTANT_K 20
 
 
 struct client_value
@@ -61,8 +63,6 @@ struct client
 	struct stats stats;
 	struct event_base* base;
 	struct bufferevent* bev;
-	struct event* stats_ev;
-	struct timeval stats_interval;
 	struct event* sig;
 	struct evlearner* learner;
 };
@@ -76,25 +76,101 @@ handle_sigint(int sig, short ev, void* arg)
 }
 
 static void
-random_string(char *s, const int len)
-{
-	int i;
-	static const char alphanum[] =
-		"0123456789abcdefghijklmnopqrstuvwxyz";
-	for (i = 0; i < len-1; ++i)
-		s[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
-	s[len-1] = 0;
-}
-
-static void
 client_submit_value(struct client* c)
 {
-	struct client_value v;
-	gettimeofday(&v.t, NULL);
-	v.size = c->value_size;
-	random_string(v.value, v.size);
-	size_t size = sizeof(struct timeval) + sizeof(size_t) + v.size;
-	paxos_submit(c->bev, (char*)&v, size);
+	struct client_value* v;
+	v = malloc(sizeof(struct client_value));
+	gettimeofday(&v->t, NULL);
+	v->size = c->value_size;
+	bool flag = false;
+	do 
+	{
+		printf("Which one do you want to input (read k) or (write k v) or (e) to exit: ");
+		fgets (v->value, MAX_VALUE_SIZE, stdin);
+		if ((strlen(v->value)>0) && (v->value[strlen (v->value) - 1] == '\n')) 
+					v->value[strlen (v->value) - 1] = '\0';
+		char* sentvalue;
+		sentvalue = malloc(sizeof(char)*v->size);
+		strcpy(sentvalue, v->value);
+		
+		char* tmp = strtok (v->value, " ");
+		sentvalue[strlen(sentvalue)]='\0';
+		bool isNumber = true;
+		if (strcmp(tmp,"read")==0)
+		{
+			tmp = strtok(NULL, " ");
+			//check data is integer
+			for(int i = 0; i < strlen(tmp);i++)
+			{ 
+				if(!isdigit(tmp[i]))
+				{
+					isNumber = false;					
+					break;
+				}				
+								
+			}
+			//if data is integer, do it
+			if(isNumber == true)
+			{
+				int val = atoi(tmp);
+				if (val >= 0 && val <= CONSTANT_K)
+				{					
+					printf("Submitting value: %s\n",sentvalue);
+					size_t size = sizeof(struct timeval) + sizeof(size_t) + strlen(sentvalue);
+					paxos_submit(c->bev, sentvalue, size);
+					flag = true;
+				}
+			}			
+			
+		}
+		else if(strcmp(tmp,"write")==0)
+		{
+			tmp = strtok(NULL, " ");
+			//check data is integer
+			for(int i = 0; i < strlen(tmp);i++)
+			{ 
+				if(!isdigit(tmp[i]))
+				{
+					isNumber = false;					
+					break;
+				}				
+								
+			}
+			if (isNumber == true)
+			{
+				int val = atoi(tmp);
+			
+				if (val >= 0 && val <= CONSTANT_K)
+				{
+					tmp = strtok(NULL, " ");
+					for(int i = 0; i < strlen(tmp);i++)
+					{ 
+						if(!isdigit(tmp[i]))
+						{
+							isNumber = false;					
+							break;
+						}				
+								
+					}
+					if(isNumber == true)
+					{	
+								
+						printf("submitting value: %s \n",sentvalue);
+						size_t size = sizeof(struct timeval) + sizeof(size_t) + strlen(sentvalue);					
+						paxos_submit(c->bev, sentvalue, size);
+						flag = true;
+					}
+				}
+				
+									
+			}
+		}
+		else if (strcmp(tmp,"e")==0)		
+			exit(0);
+			
+		
+	}while (flag == false);	
+
 }
 
 // Returns t2 - t1 in microseconds.
@@ -107,7 +183,6 @@ timeval_diff(struct timeval* t1, struct timeval* t2)
 	us += (t2->tv_usec - t1->tv_usec);
 	return us;
 }
-
 static void
 update_stats(struct stats* stats, struct client_value* delivered)
 {
@@ -130,18 +205,6 @@ on_deliver(unsigned iid, char* value, size_t size, void* arg)
 	struct client_value* v = (struct client_value*)value;
 	update_stats(&c->stats, v);
 	client_submit_value(c);
-}
-
-static void
-on_stats(evutil_socket_t fd, short event, void *arg)
-{
-	struct client* c = arg;
-	double mbps = (double)(c->stats.delivered*c->value_size*8) / (1024*1024);
-	printf("%d value/sec, %.2f Mbps, latency min %ld us max %ld us avg %ld us\n", 
-		c->stats.delivered, mbps, c->stats.min_latency, c->stats.max_latency,
-		c->stats.avg_latency);
-	memset(&c->stats, 0, sizeof(struct stats));
-	event_add(c->stats_ev, &c->stats_interval);
 }
 
 static void
@@ -192,10 +255,6 @@ make_client(const char* config, int proposer_id, int outstanding, int value_size
 	c->value_size = value_size;
 	c->outstanding = outstanding;
 	
-	c->stats_interval = (struct timeval){1, 0};
-	c->stats_ev = evtimer_new(c->base, on_stats, c);
-	event_add(c->stats_ev, &c->stats_interval);
-	
 	paxos_config.learner_catch_up = 0;
 	c->learner = evlearner_init(config, on_deliver, c, c->base);
 	
@@ -209,7 +268,6 @@ static void
 client_free(struct client* c)
 {
 	bufferevent_free(c->bev);
-	event_free(c->stats_ev);
 	event_free(c->sig);
 	event_base_free(c->base);
 	if (c->learner)
@@ -241,6 +299,7 @@ usage(const char* name)
 int
 main(int argc, char const *argv[])
 {
+	
 	int i = 1;
 	int proposer_id = 0;
 	int outstanding = 1;
@@ -253,6 +312,7 @@ main(int argc, char const *argv[])
 	}
 
 	while (i != argc) {
+		
 		if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0)
 			usage(argv[0]);
 		else if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--outstanding") == 0)
@@ -267,7 +327,9 @@ main(int argc, char const *argv[])
 	}
 	
 	srand(time(NULL));
+
 	start_client(config, proposer_id, outstanding, value_size);
 	
 	return 0;
 }
+
