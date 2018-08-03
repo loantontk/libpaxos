@@ -1,12 +1,12 @@
 
-#SHA-DB: Simple Highly Available DataBase 
+## SHA-DB: Simple Highly Available DataBase 
 
 Assume a database service that can contain up to N entries of the form (k,v), where k and v are integers. The database is initially empty, that is, it contains no entries. Clients can submit two operations to the database service: read and write. The "read" operation takes one input parameter, k, and returns value v if entry (k,v) exists in the storage or null if the entry does not exist. The "write" operation takes input parameters k and v, and creates entry (k,v) in the database if there is no entry of the form (k,s) in the database; if entry (k,s) exists, the operation replaces the value of s with v. 
 
 My task is to implement a highly available service. There is one client, who submits read and write operations to the replicas. The database is replicated in two servers. Use Paxos (libpaxos3) to ensure consistency of the replicas. 
 
 
-#LibPaxos
+## LibPaxos
 
 This is LibPaxos3! A complete rewrite of [LibPaxos2][1].
 LibPaxos3 has been improved in the following aspects:
